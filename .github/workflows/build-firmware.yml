@@ -1,0 +1,98 @@
+name: Build Firmware
+
+on:
+  workflow_dispatch:
+
+env:
+  TARGET_DEVICE: xiaomi_ax3600
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo docker image prune --all --force
+          df -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk \
+            gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man \
+            intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev \
+            libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libncursesw5-dev \
+            libpython3-dev libreadline-dev libssl-dev libtool lld llvm lrzsz mkisofs \
+            msmtp nano ninja-build p7zip p7zip-full patch pigz python3 python3-pip \
+            python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons \
+            squashfs-tools subversion swig texinfo uglifyjs unzip vim wget xmlto xxd \
+            zlib1g-dev zstd
+
+      - name: Update feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure firmware
+        run: |
+          cp nss-setup/config-nss.seed .config
+          sed -i 's|# CONFIG_TARGET_qualcommax_ipq807x_DEVICE_xiaomi_ax3600 is not set|CONFIG_TARGET_qualcommax_ipq807x_DEVICE_xiaomi_ax3600=y|' .config
+          cat >> .config << 'EOF'
+
+          # ===== mwan3 双线分流 =====
+          CONFIG_PACKAGE_mwan3=y
+          CONFIG_PACKAGE_luci-app-mwan3=y
+          CONFIG_PACKAGE_luci-i18n-mwan3-zh-cn=y
+
+          # ===== WireGuard =====
+          CONFIG_PACKAGE_kmod-wireguard=y
+          CONFIG_PACKAGE_wireguard-tools=y
+          CONFIG_PACKAGE_luci-proto-wireguard=y
+          CONFIG_PACKAGE_rpcd-mod-wireguard=y
+
+          # ===== 安全加固 =====
+          CONFIG_PACKAGE_luci-app-banip=y
+          CONFIG_PACKAGE_luci-i18n-banip-zh-cn=y
+          CONFIG_PACKAGE_luci-app-adblock=y
+          CONFIG_PACKAGE_luci-i18n-adblock-zh-cn=y
+
+          # ===== DDNS =====
+          CONFIG_PACKAGE_luci-app-ddns=y
+          CONFIG_PACKAGE_luci-i18n-ddns-zh-cn=y
+          CONFIG_PACKAGE_ddns-scripts=y
+          CONFIG_PACKAGE_ddns-scripts-services=y
+
+          # ===== UPnP =====
+          CONFIG_PACKAGE_luci-app-upnp=y
+          CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y
+          CONFIG_PACKAGE_miniupnpd-nftables=y
+
+          # ===== 中文界面 =====
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
+          EOF
+          make defconfig
+
+      - name: Download sources
+        run: |
+          make download -j$(nproc)
+          make download -j1 V=s
+
+      - name: Build firmware
+        run: |
+          make -j$(nproc) || make -j1 V=s
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-nss-${{ env.TARGET_DEVICE }}
+          path: |
+            bin/targets/qualcommax/ipq807x/*.bin
+            bin/targets/qualcommax/ipq807x/sha256sums
+          retention-days: 7
